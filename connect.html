@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect the extension — EdgeLvl</title>
+<link rel="icon" href="/favicon.ico">
+<style>
+  :root { --bg:#fbfbfa; --fg:#14140f; --dim:rgba(0,0,0,.58); --line:rgba(0,0,0,.11);
+          --field:#fff; --green:#12924b; --red:#c0362c; }
+  :root[data-theme="dark"] { --bg:#0e0e10; --fg:#f2f2ef; --dim:rgba(255,255,255,.62);
+          --line:rgba(255,255,255,.14); --field:#16161a; --green:#2ecc71; --red:#ff5f52; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:13px/1.6 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+         display:flex; justify-content:center; padding:8vh 16px; -webkit-font-smoothing:antialiased; }
+  .card { width:100%; max-width:440px; }
+  h1 { font-size:15px; font-weight:600; margin:0 0 4px; }
+  .lede { color:var(--dim); margin:0 0 24px; }
+  label { display:block; color:var(--dim); margin:16px 0 6px; font-size:11px;
+          letter-spacing:.08em; text-transform:uppercase; }
+  input { width:100%; background:var(--field); border:1px solid var(--line); color:var(--fg);
+          padding:12px 13px; border-radius:7px; font:inherit; }
+  input:focus { outline:none; border-color:var(--green); }
+  button { width:100%; margin-top:16px; padding:13px; border:0; border-radius:7px;
+           background:var(--fg); color:var(--bg); font:inherit; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.45; cursor:default; }
+  .msg { margin-top:16px; padding:11px 13px; border-radius:7px; background:var(--field);
+         border:1px solid var(--line); word-break:break-word; }
+  .msg.bad { border-color:var(--red); color:var(--red); }
+  .msg.good { border-color:var(--green); color:var(--green); }
+  ul { color:var(--dim); padding-left:18px; margin:0 0 8px; }
+  li { margin-bottom:6px; }
+  a { color:var(--dim); }
+  .links { margin-top:24px; font-size:12px; color:var(--dim); }
+  [hidden] { display:none !important; }
+</style>
+<script>
+  try { if (localStorage.getItem('edgelvl_theme') === 'dark')
+          document.documentElement.setAttribute('data-theme','dark'); } catch (e) {}
+</script>
+</head>
+<body>
+<div class="card">
+  <h1>Connect the extension</h1>
+  <p class="lede">Greenlight coins from GMGN and DexScreener with the EdgeLvl extension.</p>
+
+  <div id="noext" hidden>
+    <p class="lede" style="margin-bottom:8px">The extension isn't installed in this browser.</p>
+    <ul>
+      <li>Install EdgeLvl from the Chrome Web Store, then reload this page.</li>
+      <li>Already installed? Open this page in the same browser profile.</li>
+    </ul>
+  </div>
+
+  <div id="signin" hidden>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="email" placeholder="you@example.com">
+    <div id="codewrap" hidden>
+      <label for="code">Code</label>
+      <input id="code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456">
+    </div>
+    <button id="signbtn">Send code</button>
+  </div>
+
+  <div id="ready" hidden>
+    <p class="lede" style="margin-bottom:8px">Connecting lets this browser:</p>
+    <ul>
+      <li>greenlight and unarm coins for your bot</li>
+      <li>show your balance, strategies and what your bot is doing</li>
+    </ul>
+    <p class="lede" style="margin:10px 0 0">It can't withdraw, sell or change your settings.
+      Those stay on edgelvl.app.</p>
+    <button id="connectbtn">Connect this browser</button>
+  </div>
+
+  <div class="msg" id="msg" hidden></div>
+
+  <div class="links">
+    <a href="#" id="revoke" hidden>Disconnect every browser</a>
+    <span id="revokesep" hidden> · </span>
+    <a href="/">Back to the terminal</a>
+  </div>
+</div>
+
+<script type="module">
+/* Same Privy client and storage as the terminal, so anyone already signed in
+   there is signed in here without doing it again. Auth only: this page never
+   touches a wallet, so it never mounts Privy's signing frame. */
+import Privy, { LocalStorage } from 'https://esm.sh/@privy-io/js-sdk-core@0.68.6';
+
+const API = 'https://api.edgelvl.app';
+const privy = new Privy({ appId: 'cmsasu2fa00930dlc04skfjwl', storage: new LocalStorage() });
+const $ = (id) => document.getElementById(id);
+
+function say(text, kind = '') {
+  $('msg').hidden = !text;
+  $('msg').textContent = text || '';
+  $('msg').className = 'msg ' + kind;
+}
+
+/* The extension's connect script marks the page and answers a ping. Asked
+   rather than only listened for, because it may have announced itself before
+   this module finished loading. */
+function extensionPresent() {
+  if (document.documentElement.dataset.edgelvlExtension) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const done = (v) => { window.removeEventListener('message', on); resolve(v); };
+    const on = (e) => {
+      if (e.source === window && e.data && e.data.type === 'edgelvl-ext-ready') done(true);
+    };
+    window.addEventListener('message', on);
+    window.postMessage({ type: 'edgelvl-ext-ping' }, location.origin);
+    setTimeout(() => done(!!document.documentElement.dataset.edgelvlExtension), 1200);
+  });
+}
+
+async function token() {
+  try { return await privy.getAccessToken(); } catch (e) { return null; }
+}
+
+async function show() {
+  const [hasExt, t] = await Promise.all([extensionPresent(), token()]);
+  $('noext').hidden = hasExt;
+  $('signin').hidden = !hasExt || !!t;
+  $('ready').hidden = !hasExt || !t;
+  $('revoke').hidden = $('revokesep').hidden = !t;
+}
+
+let sent = false;
+$('signbtn').onclick = async () => {
+  const email = $('email').value.trim();
+  if (!email) return;
+  $('signbtn').disabled = true;
+  try {
+    if (!sent) {
+      await privy.auth.email.sendCode(email);
+      sent = true;
+      $('codewrap').hidden = false;
+      $('signbtn').textContent = 'Sign in';
+      say('Code sent. Check your email.');
+    } else {
+      await privy.auth.email.loginWithCode(email, $('code').value.trim());
+      say('');
+      await show();
+    }
+  } catch (e) {
+    say(e.message || String(e), 'bad');
+  }
+  $('signbtn').disabled = false;
+};
+
+$('connectbtn').onclick = async () => {
+  $('connectbtn').disabled = true;
+  say('Connecting…');
+  try {
+    const t = await token();
+    if (!t) { await show(); throw new Error('Signed out. Sign in and try again.'); }
+    const r = await fetch(API + '/api/extension/connect', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + t } });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.token) throw new Error(d.detail || 'Could not connect. Try again.');
+
+    const ok = await new Promise((resolve) => {
+      const on = (e) => {
+        if (e.source !== window || !e.data || e.data.type !== 'edgelvl-connected') return;
+        window.removeEventListener('message', on);
+        resolve(!!e.data.ok);
+      };
+      window.addEventListener('message', on);
+      // To this page's own origin only; the extension's script is the listener.
+      window.postMessage({ type: 'edgelvl-connect', token: d.token }, location.origin);
+      setTimeout(() => { window.removeEventListener('message', on); resolve(false); }, 5000);
+    });
+    if (!ok) throw new Error('The extension did not respond. Reload this page and try again.');
+    say('Connected. Open any coin on GMGN or DexScreener and the panel appears bottom-right.', 'good');
+    $('ready').hidden = true;
+  } catch (e) {
+    say(e.message || String(e), 'bad');
+  }
+  $('connectbtn').disabled = false;
+};
+
+$('revoke').onclick = async (e) => {
+  e.preventDefault();
+  const t = await token();
+  if (!t) return show();
+  const r = await fetch(API + '/api/extension/disconnect', {
+    method: 'POST', headers: { Authorization: 'Bearer ' + t } });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) return say(d.detail || 'Could not disconnect. Try again.', 'bad');
+  say(`Disconnected ${d.disconnected} browser${d.disconnected === 1 ? '' : 's'}.`, 'good');
+  await show();
+};
+
+show();
+</script>
+</body>
+</html>
